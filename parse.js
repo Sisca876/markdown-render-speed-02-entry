@@ -505,127 +505,130 @@ const BLOCK = buildBlockRules();
 
 const PUNCT = /[\p{P}\p{S}]/u;
 const PUNCT_SPACE = /[\s\p{P}\p{S}]/u;
-const NOT_PUNCT_SPACE = /[^\s\p{P}\p{S}]/u;
-const PUNCT_NOT_TILDE = /(?!~)[\p{P}\p{S}]/u;
-const PUNCT_SPACE_NOT_TILDE = /(?!~)[\s\p{P}\p{S}]/u;
-const NOT_PUNCT_SPACE_OR_TILDE = /(?:[^\s\p{P}\p{S}]|~)/u;
-const OPEN_QUOTE = /[\p{Pi}\p{Ps}"']/u;
+const NOT_PUNCT_SPACE = new RegExp(String.raw`[^\s\p{P}\p{S}]`, 'u');
+const PUNCT_NOT_TILDE = new RegExp(String.raw`(?!~)[\p{P}\p{S}]`, 'u');
+const PUNCT_SPACE_NOT_TILDE = new RegExp(String.raw`(?!~)[\s\p{P}\p{S}]`, 'u');
+const NOT_PUNCT_SPACE_OR_TILDE = new RegExp(String.raw`(?:[^\s\p{P}\p{S}]|~)`, 'u');
+const OPEN_QUOTE = new RegExp(String.raw`[\p{Pi}\p{Ps}"']`, 'u');
 
 const INLINE = {
-  escape: /^\\([!"#$%&'()*+,\-./:;<=>?@\[\]\\^_`{|}~])/,
-  code: /^(`+)([^`]|[^`][\s\S]*?[^`])\1(?!`)/,
-  br: /^( {2,}|\\)\n(?!\s*$)[ \t]*/,
+  escape: new RegExp(String.raw`^\\([!"#$%&'()*+,\-./:;<=>?@\[\]\\^_\x60{|}~])`),
+  code: new RegExp(String.raw`^(\x60+)([^\x60]|[^\x60][\s\S]*?[^\x60])\1(?!\x60)`),
+  br: new RegExp(String.raw`^( {2,}|\\` + String.raw`)\n(?!\s*$)[ \t]*`),
   text: null, // built below (needs url pieces)
-  autolink: rx(/^<(scheme:[^\s\x00-\x1f<>]*|email)>/)
-    .replace('scheme', /[a-zA-Z][a-zA-Z0-9+.-]{1,31}/)
+  autolink: rx(String.raw`^<(scheme:[^\s\x00-\x1f<>]*|email)>`)
+    .replace('scheme', new RegExp(String.raw`[a-zA-Z][a-zA-Z0-9+.-]{1,31}`))
     .replace(
       'email',
-      /[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+(@)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+(?![-_])/,
+      new RegExp(String.raw`[a-zA-Z0-9.!#$%&'*+/=?^_\x60{|}~-]+(@)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+(?![-_])`),
     )
     .get(),
   tag: rx(
-    '^comment|^</[a-zA-Z][a-zA-Z0-9-]*\\s*>|^<[a-zA-Z][a-zA-Z0-9-]*(?:attribute)*?\\s*/?>|^<\\?[\\s\\S]*?\\?>|^<![a-zA-Z]+\\s[\\s\\S]*?>|^<!\\[CDATA\\[[\\s\\S]*?\\]\\]>',
+    String.raw`^comment|^</[a-zA-Z][a-zA-Z0-9-]*\s*>|^<[a-zA-Z][a-zA-Z0-9-]*(?:attribute)*?\s*/?>|^<\?[\s\S]*?\?>|^<![a-zA-Z]+\s[\s\S]*?>|^<!\[CDATA\[[\s\S]*?\]\]>`,
   )
     .replace('comment', rx(HTML_COMMENT).replace('(?:-->|$)', '-->').get())
     .replace(
       'attribute',
-      /\s+[a-zA-Z:_][\w.:-]*(?:\s*=\s*"[^"]*"|\s*=\s*'[^']*'|\s*=\s*[^\s"'=<>`]+)?/,
+      new RegExp(String.raw`\s+[a-zA-Z:_][\w.:-]*(?:\s*=\s*"[^"]*"|\s*=\s*'[^']*'|\s*=\s*[^\s"'=<>\x60]+)?`),
     )
     .get(),
   link: null,
   reflink: null,
   nolink: null,
-  emStrongLDelim: rx(/^(?:\*+(?:((?!\*)punct)|([^\s*]))?)|^_+(?:((?!_)punct)|([^\s_]))?/, 'u')
-    .replace(/punct/g, PUNCT_NOT_TILDE)
+  emStrongLDelim: rx(String.raw`^(?:\*+(?:((?!\*)punct)|([^\s*]))?)|^_+(?:((?!_)punct)|([^\s_]))?`, 'u')
+    .replace(new RegExp(String.raw`punct`, 'g'), PUNCT_NOT_TILDE)
     .get(),
   emStrongRDelimAst: rx(
-    '^[^_*]*?__[^_*]*?\\*[^_*]*?(?=__)|[^*]+(?=[^*])|(?!\\*)punct(\\*+)(?=[\\s]|$)|notPunctSpace(\\*+)(?!\\*)(?=punctSpace|$)|(?!\\*)punctSpace(\\*+)(?=notPunctSpace)|[\\s](\\*+)(?!\\*)(?=punct)|(?!\\*)punct(\\*+)(?!\\*)(?=punct)|notPunctSpace(\\*+)(?=notPunctSpace)',
+    String.raw`^[^_*]*?__[^_*]*?\*[^_*]*?(?=__)|[^*]+(?=[^*])|(?!\*)punct(\*+)(?=[\s]|$)|notPunctSpace(\*+)(?!\*)(?=punctSpace|$)|(?!\*)punctSpace(\*+)(?=notPunctSpace)|[\s](\*+)(?!\*)(?=punct)|(?!\*)punct(\*+)(?!\*)(?=punct)|notPunctSpace(\*+)(?=notPunctSpace)`,
     'gu',
   )
-    .replace(/notPunctSpace/g, NOT_PUNCT_SPACE_OR_TILDE)
-    .replace(/punctSpace/g, PUNCT_SPACE_NOT_TILDE)
-    .replace(/punct/g, PUNCT_NOT_TILDE)
+    .replace(new RegExp(String.raw`notPunctSpace`, 'g'), NOT_PUNCT_SPACE_OR_TILDE)
+    .replace(new RegExp(String.raw`punctSpace`, 'g'), PUNCT_SPACE_NOT_TILDE)
+    .replace(new RegExp(String.raw`punct`, 'g'), PUNCT_NOT_TILDE)
     .get(),
   emStrongRDelimUnd: rx(
-    '^[^_*]*?\\*\\*[^_*]*?_[^_*]*?(?=\\*\\*)|[^_]+(?=[^_])|(?!_)punct(_+)(?=[\\s]|$)|notPunctSpace(_+)(?!_)(?=punctSpace|$)|(?!_)punctSpace(_+)(?=notPunctSpace)|[\\s](_+)(?!_)(?=punct)|(?!_)punct(_+)(?!_)(?=punct)',
+    String.raw`^[^_*]*?\*\*[^_*]*?_[^_*]*?(?=\*\*)|[^_]+(?=[^_])|(?!_)punct(_+)(?=[\s]|$)|notPunctSpace(_+)(?!_)(?=punctSpace|$)|(?!_)punctSpace(_+)(?=notPunctSpace)|[\s](_+)(?!_)(?=punct)|(?!_)punct(_+)(?!_)(?=punct)`,
     'gu',
   )
-    .replace(/notPunctSpace/g, NOT_PUNCT_SPACE_OR_TILDE)
-    .replace(/punctSpace/g, PUNCT_SPACE_NOT_TILDE)
-    .replace(/punct/g, PUNCT_NOT_TILDE)
+    .replace(new RegExp(String.raw`notPunctSpace`, 'g'), NOT_PUNCT_SPACE_OR_TILDE)
+    .replace(new RegExp(String.raw`punctSpace`, 'g'), PUNCT_SPACE_NOT_TILDE)
+    .replace(new RegExp(String.raw`punct`, 'g'), PUNCT_NOT_TILDE)
     .get(),
-  delLDelim: rx(/^~~?(?:((?!~)punct)|[^\s~])/, 'u').replace(/punct/g, PUNCT).get(),
+  delLDelim: rx(String.raw`^~~?(?:((?!~)punct)|[^\s~])`, 'u').replace(new RegExp(String.raw`punct`, 'g'), PUNCT).get(),
   delRDelim: rx(
-    '^[^~]+(?=[^~])|(?!~)punct(~~?)(?=[\\s]|$)|notPunctSpace(~~?)(?!~)(?=punctSpace|$)|(?!~)punctSpace(~~?)(?=notPunctSpace)|[\\s](~~?)(?!~)(?=punct)|(?!~)punct(~~?)(?!~)(?=punct)|notPunctSpace(~~?)(?=notPunctSpace)',
+    String.raw`^[^~]+(?=[^~])|(?!~)punct(~~?)(?=[\s]|$)|notPunctSpace(~~?)(?!~)(?=punctSpace|$)|(?!~)punctSpace(~~?)(?=notPunctSpace)|[\s](~~?)(?!~)(?=punct)|(?!~)punct(~~?)(?!~)(?=punct)|notPunctSpace(~~?)(?=notPunctSpace)`,
     'gu',
   )
-    .replace(/notPunctSpace/g, NOT_PUNCT_SPACE)
-    .replace(/punctSpace/g, PUNCT_SPACE)
-    .replace(/punct/g, PUNCT)
+    .replace(new RegExp(String.raw`notPunctSpace`, 'g'), NOT_PUNCT_SPACE)
+    .replace(new RegExp(String.raw`punctSpace`, 'g'), PUNCT_SPACE)
+    .replace(new RegExp(String.raw`punct`, 'g'), PUNCT)
     .get(),
   url: null,
-  backpedal: /(?:[^?!.,:;*_'"~()&]+|\([^)]*\)|&(?![a-zA-Z0-9]+;$)|[?!.,:;*_'"~)]+(?!$))+/,
-  anyPunct: rx(/\\(punct)/, 'gu').replace(/punct/g, PUNCT).get(),
-  anyPunctOutsideCode: rx(/(`+)(?:[^`]|[^`][\s\S]*?[^`])\1(?!`)|`+|\\(punct)/, 'gu')
-    .replace(/punct/g, PUNCT)
+  backpedal: new RegExp(String.raw`(?:[^?!.,:;*_'"~()&]+|\([^)]*\)|&(?![a-zA-Z0-9]+;$)|[?!.,:;*_'"~)]+(?!$))+`),
+  anyPunct: rx(String.raw`\\(punct)`, 'gu').replace(new RegExp(String.raw`punct`, 'g'), PUNCT).get(),
+  anyPunctOutsideCode: rx(String.raw`(\x60+)(?:[^\x60]|[^\x60][\s\S]*?[^\x60])\1(?!\x60)|\x60+|\\(punct)`, 'gu')
+    .replace(new RegExp(String.raw`punct`, 'g'), PUNCT)
     .get(),
-  blockSkip: rx(/link|precode-code|html/, 'g')
+  blockSkip: rx(String.raw`link|precode-code|html`, 'g')
     .replace(
       'link',
-      /\[(?:[^\[\]`]|(?<a>`+)[^`]+\k<a>(?!`))*?\]\((?:\\[\s\S]|[^\\\(\)]|\((?:\\[\s\S]|[^\\\(\)])*\))*\)/,
+      new RegExp(String.raw`\[(?:[^\[\]\x60]|(?<a>\x60+)[^\x60]+\k<a>(?!\x60))*?\]\((?:\\[\s\S]|[^\\\(\)]|\((?:\\[\s\S]|[^\\\(\)])*\))*\)`),
     )
     .replace('precode-', '(?<!`)()')
-    .replace('code', /(?<b>`+)[^`]+\k<b>(?!`)/)
-    .replace('html', /<(?! )[^<>]*?>/)
+    .replace('code', new RegExp(String.raw`(?<b>\x60+)[^\x60]+\k<b>(?!\x60)`))
+    .replace('html', new RegExp(String.raw`<(?! )[^<>]*?>`))
     .get(),
   reflinkSearch: null,
-  punctuation: rx(/^((?![*_])punctSpace)/, 'u').replace(/punctSpace/g, PUNCT_SPACE).get(),
+  punctuation: rx(String.raw`^((?![*_])punctSpace)`, 'u').replace(new RegExp(String.raw`punctSpace`, 'g'), PUNCT_SPACE).get(),
 };
 
-const EMAIL_RE =
-  /[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+(@)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+(?![-_])/;
-const EMAIL_SIMPLE =
-  /[A-Za-z0-9._+-]+@[a-zA-Z0-9-_]+(?:\.[a-zA-Z0-9-_]*[a-zA-Z0-9])+(?![\w-])/;
-const EMAIL_SIMPLE_GRP =
-  /[A-Za-z0-9._+-]+(@)[a-zA-Z0-9-_]+(?:\.[a-zA-Z0-9-_]*[a-zA-Z0-9])+(?![\w-])/;
-const PROTOCOL_RE = /[hH][tT][tT][pP][sS]?|[fF][tT][pP]/;
-const MAILTO_RE = rx(/(?:mailto:email|xmpp:email(?:\/[A-Za-z0-9@.]+)?)/)
-  .replace(/email/g, EMAIL_SIMPLE)
+const EMAIL_RE = new RegExp(
+  String.raw`[a-zA-Z0-9.!#$%&'*+/=?^_\x60{|}~-]+(@)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+(?![-_])`,
+);
+const EMAIL_SIMPLE = new RegExp(
+  String.raw`[A-Za-z0-9._+-]+@[a-zA-Z0-9-_]+(?:\.[a-zA-Z0-9-_]*[a-zA-Z0-9])+(?![\w-])`,
+);
+const EMAIL_SIMPLE_GRP = new RegExp(
+  String.raw`[A-Za-z0-9._+-]+(@)[a-zA-Z0-9-_]+(?:\.[a-zA-Z0-9-_]*[a-zA-Z0-9])+(?![\w-])`,
+);
+const PROTOCOL_RE = new RegExp(String.raw`[hH][tT][tT][pP][sS]?|[fF][tT][pP]`);
+const MAILTO_RE = rx(String.raw`(?:mailto:email|xmpp:email(?:\/[A-Za-z0-9@.]+)?)`)
+  .replace(new RegExp(String.raw`email`, 'g'), EMAIL_SIMPLE)
   .get();
 
-const LINK_LABEL = rx(/(?:\[(?:brackets|\\[\s\S]|[^\[\]\\])*\]|\\[\s\S]|`+(?!`)[^`]*?`+(?!`)|``+(?=\])|[^\[\]\\`])*?/)
-  .replace('brackets', /\[(?:\\[\s\S]|[^\[\]\\])*\]/)
+const LINK_LABEL = rx(String.raw`(?:\[(?:brackets|\\[\s\S]|[^\[\]\\])*\]|\\[\s\S]|\x60+(?!\x60)[^\x60]*?\x60+(?!\x60)|\x60\x60+(?=\])|[^\[\]\\\x60])*?`)
+  .replace('brackets', new RegExp(String.raw`\[(?:\\[\s\S]|[^\[\]\\])*\]`))
   .get();
-const REF_LABEL = /(?!\s*\])(?:\\[\s\S]|[^\[\]\\\n]|\n(?![ \t]*\n))+/;
+const REF_LABEL = new RegExp(String.raw`(?!\s*\])(?:\\[\s\S]|[^\[\]\\\n]|\n(?![ \t]*\n))+`);
 
-INLINE.link = rx(/^!?\[(label)\]\([ \t\n]*(href)(?:(?:[ \t]+(?:\n[ \t]*)?|\n[ \t]*)(title))?[ \t\n]*\)/)
+INLINE.link = rx(String.raw`^!?\[(label)\]\([ \t\n]*(href)(?:(?:[ \t]+(?:\n[ \t]*)?|\n[ \t]*)(title))?[ \t\n]*\)`)
   .replace('label', LINK_LABEL)
-  .replace('href', /<(?:\\.|[^\n<>\\])+>|[^ \t\n\x00-\x1f]+|(?=\))/)
-  .replace('title', /"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|\((?:\\[\s\S]|[^)\\])*\)/)
+  .replace('href', new RegExp(String.raw`<(?:\\.|[^\n<>\\])+>|[^ \t\n\x00-\x1f]+|(?=\))`))
+  .replace('title', new RegExp(String.raw`"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|\((?:\\[\s\S]|[^)\\])*\)`))
   .get();
-INLINE.reflink = rx(/^!?\[(label)\]\[(ref)\]/)
+INLINE.reflink = rx(String.raw`^!?\[(label)\]\[(ref)\]`)
   .replace('label', LINK_LABEL)
   .replace('ref', REF_LABEL)
   .get();
-INLINE.nolink = rx(/^!?\[(ref)\](?:\[\])?/).replace('ref', REF_LABEL).get();
-INLINE.url = rx(/^emailProtocol|^((?:protocol):\/\/|www\.)(?:[a-zA-Z0-9\-]+\.?)+[^\s<]*|^email/)
+INLINE.nolink = rx(String.raw`^!?\[(ref)\](?:\[\])?`).replace('ref', REF_LABEL).get();
+INLINE.url = rx(String.raw`^emailProtocol|^((?:protocol):\/\/|www\.)(?:[a-zA-Z0-9\-]+\.?)+[^\s<]*|^email`)
   .replace('emailProtocol', MAILTO_RE)
   .replace('protocol', PROTOCOL_RE)
   .replace('email', EMAIL_SIMPLE_GRP)
   .get();
 
 const REFLINK_SEARCH = (() => {
-  const refInner = rx(/(?:[^\[\]\\`]*(?:\[(?:brackets|\\[\s\S]|[^\[\]\\])*\]|\\[\s\S]|`+(?!`)[^`]*?`+(?!`)|``+(?=\]))){0,999}?[^\[\]\\`]*?/)
-    .replace('brackets', /\[(?:\\[\s\S]|[^\[\]\\])*\]/)
+  const refInner = rx(String.raw`(?:[^\[\]\\\x60]*(?:\[(?:brackets|\\[\s\S]|[^\[\]\\])*\]|\\[\s\S]|\x60+(?!\x60)[^\x60]*?\x60+(?!\x60)|\x60\x60+(?=\]))){0,999}?[^\[\]\\\x60]*?`)
+    .replace('brackets', new RegExp(String.raw`\[(?:\\[\s\S]|[^\[\]\\])*\]`))
     .get();
-  const reflinkPat = rx(/^!?\[(label)\]\[(ref)\]/)
+  const reflinkPat = rx(String.raw`^!?\[(label)\]\[(ref)\]`)
     .replace('label', refInner)
-    .replace('ref', /(?:(?!\s*\])(?:\\[\s\S]|[^\[\]\\]){1,999})/)
+    .replace('ref', new RegExp(String.raw`(?:(?!\s*\])(?:\\[\s\S]|[^\[\]\\]){1,999})`))
     .get();
-  const nolinkPat = rx(/^!?\[(ref)\](?:\[\])?/)
-    .replace('ref', /(?:(?!\s*\])(?:\\[\s\S]|[^\[\]\\]){1,999})/)
+  const nolinkPat = rx(String.raw`^!?\[(ref)\](?:\[\])?`)
+    .replace('ref', new RegExp(String.raw`(?:(?!\s*\])(?:\\[\s\S]|[^\[\]\\]){1,999})`))
     .get();
-  return rx('reflink|nolink(?!\\()', 'g')
+  return rx(String.raw`reflink|nolink(?!\()`, 'g')
     .replace('reflink', reflinkPat)
     .replace('nolink', nolinkPat)
     .get();
@@ -634,11 +637,11 @@ INLINE.reflinkSearch = REFLINK_SEARCH;
 
 // Inline text: consumes a run of plain text, stopping before markup.
 INLINE.text = rx(
-  /^(?:[^a-zA-Z0-9](?=emailProtocol)|(`+|~+|[^`~])(?:(?=[`~])|(?= {2,}\n)|(?=[a-zA-Z0-9.!#$%&'*+\/=?_`{\|}~-]+@)|[\s\S]*?(?:(?=[\\<!\[`*~_]|\b_|protocol:\/\/|wwwStart|$)|[^ ](?= {2,}\n)|[^a-zA-Z0-9](?=emailProtocol)|[^a-zA-Z0-9.!#$%&'*+\/=?_`{\|}~-](?=[a-zA-Z0-9.!#$%&'*+\/=?_`{\|}~-]+@))))/,
+  String.raw`^(?:[^a-zA-Z0-9](?=emailProtocol)|(\x60+|~+|[^\x60~])(?:(?=[\x60~])|(?= {2,}\n)|(?=[a-zA-Z0-9.!#$%&'*+\/=?_\x60{\|}~-]+@)|[\s\S]*?(?:(?=[\\<!\[\x60*~_]|\b_|protocol:\/\/|wwwStart|$)|[^ ](?= {2,}\n)|[^a-zA-Z0-9](?=emailProtocol)|[^a-zA-Z0-9.!#$%&'*+\/=?_\x60{\|}~-](?=[a-zA-Z0-9.!#$%&'*+\/=?_\x60{\|}~-]+@))))`,
 )
   .replace('protocol', PROTOCOL_RE)
-  .replace(/emailProtocol/g, /(?:mailto|xmpp):/)
-  .replace('wwwStart', '(?<![^\\s*_~(])www\\.')
+  .replace(new RegExp(String.raw`emailProtocol`, 'g'), new RegExp(String.raw`(?:mailto|xmpp):`))
+  .replace('wwwStart', String.raw`(?<![^\s*_~(])www\.`)
   .get();
 
 // ---------------------------------------------------------------- block lexer
