@@ -1544,17 +1544,30 @@ function tokEscape(src) {
   return { type: 'escape', raw: m[0], text: m[1] };
 }
 
+// Flag updates for an HTML tag: entering/leaving <a> toggles inLink,
+// entering/leaving a raw block (pre, code, kbd, script) toggles inRawBlock.
+const TAG_FLAGS = [
+  [O.startATag, 'inLink', true],
+  [O.endATag, 'inLink', false],
+  [O.startPreScriptTag, 'inRawBlock', true],
+  [O.endPreScriptTag, 'inRawBlock', false],
+];
+
 function tokTag(lx, src) {
   const m = INLINE.tag.exec(src);
   if (m === null) return null;
   const tag = m[0];
-  // Track whether inline content is inside a link or a raw block (pre,
-  // code, kbd, script): the lexer consults both flags while tokenising.
-  if (O.startATag.test(tag)) lx.inLink = true;
-  if (O.endATag.test(tag)) lx.inLink = false;
-  if (O.startPreScriptTag.test(tag)) lx.inRawBlock = true;
-  if (O.endPreScriptTag.test(tag)) lx.inRawBlock = false;
+  for (const [re, flag, value] of TAG_FLAGS) {
+    if (re.test(tag)) lx[flag] = value;
+  }
   return { type: 'html', raw: tag, inLink: lx.inLink, inRawBlock: lx.inRawBlock, block: false, text: tag };
+}
+
+// Skip a code span starting at `i` in `linkText`, returning the index just
+// past it (or `i` when there is no code span there).
+function skipCodeSpan(linkText, i) {
+  const m = INLINE.code.exec(linkText.slice(i));
+  return m === null ? i : i + m[0].length;
 }
 
 // Does the link text contain a raw HTML tag that runs past its end?
@@ -1566,8 +1579,8 @@ function linkTextHasRawTag(fullSrc, linkText, offset) {
     const ch = linkText[i];
     if (ch === '\\') { i += 2; continue; }
     if (ch === '`') {
-      const m = INLINE.code.exec(linkText.slice(i));
-      if (m !== null) { i += m[0].length; continue; }
+      const next = skipCodeSpan(linkText, i);
+      if (next !== i) { i = next; continue; }
     }
     if (ch !== '<') { i++; continue; }
     const rest = fullSrc.slice(offset + i);
