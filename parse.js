@@ -15,25 +15,28 @@
 const CARET = /(^|[^\[])\^/g;
 
 // Small builder for regexes composed from parts, like marked's edit().
+// Each replace() swaps one named placeholder for a pattern; get() builds
+// the final regex. The CARET fixup keeps a `^` inside a substituted
+// pattern anchored to the start of the whole regex.
 function rx(src, flags = '') {
   let s = typeof src === 'string' ? src : src.source;
-  const api = {
-    replace(name, rep) {
-      const r = typeof rep === 'string' ? rep : rep.source;
-      s = s.replace(name, r.replace(CARET, '$1'));
-      return api;
-    },
-    get() {
-      return new RegExp(s, flags);
-    },
+  const replace = (name, rep) => {
+    const pat = typeof rep === 'string' ? rep : rep.source;
+    s = s.replace(name, pat.replace(CARET, '$1'));
+    return api;
   };
+  const get = () => new RegExp(s, flags);
+  const api = { replace, get };
   return api;
 }
 
 // Character classes for the scanners below, written out instead of
 // leaning on regexes: the hot paths run these per character.
 function isHexCode(c) {
-  return (c >= 48 && c <= 57) || (c >= 65 && c <= 70) || (c >= 97 && c <= 102);
+  const isDigit = c >= 48 && c <= 57;
+  const isUpperHex = c >= 65 && c <= 70;
+  const isLowerHex = c >= 97 && c <= 102;
+  return isDigit || isUpperHex || isLowerHex;
 }
 function hexValue(c) {
   if (c >= 48 && c <= 57) return c - 48;
@@ -41,7 +44,8 @@ function hexValue(c) {
   return c - 87;
 }
 function isWordCode(c) {
-  return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95;
+  const isAlnum = (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
+  return isAlnum || c === 95;
 }
 
 // Does a valid entity or character reference start at s[i] (where s[i]
@@ -318,12 +322,11 @@ const BLOCK_TAGS =
 function memoRegex(fn) {
   const cache = new Map();
   return (key) => {
-    let r = cache.get(key);
-    if (!r) {
-      r = fn(key);
-      cache.set(key, r);
-    }
-    return r;
+    const hit = cache.get(key);
+    if (hit !== undefined) return hit;
+    const made = fn(key);
+    cache.set(key, made);
+    return made;
   };
 }
 
@@ -429,43 +432,50 @@ const DEF_RE = rx(
   .replace('title', TITLE_RE)
   .get();
 
+// Apply a list of [name, pattern] substitutions to a regex source and
+// build the resulting regex.
+function subAll(source, subs) {
+  let r = rx(source);
+  for (const [name, pat] of subs) r = r.replace(name, pat);
+  return r.get();
+}
+
 function buildBlockRules() {
-  const lheading = rx(LHEADING_CORE)
-    .replace(/bull/g, BULLET)
-    .replace(/blockCode/g, /(?: {4}| {0,3}\t)/)
-    .replace(/fences/g, / {0,3}(?:`{3,}|~{3,})/)
-    .replace(/blockquote/g, / {0,3}>/)
-    .replace(/heading/g, HEADING_SRC)
-    .replace(/hr/g, / {0,3}(?:(?:-[\t ]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})(?:\n+|$)/)
-    .replace(/html/g, / {0,3}<[^\n>]+>\n/)
-    .replace(/table/g, / {0,3}\|?(?:[:\- ]*\|)+[\:\- ]*\n/)
-    .get();
-  const table = rx(TABLE_SRC)
-    .replace('hr', HR_SRC)
-    .replace('heading', HEADING_SRC)
-    .replace('blockquote', BLOCKQUOTE_SRC)
-    .replace('code', /(?: {4}| {0,3}\t)[^\n]/)
-    .replace('fences', FENCES_SRC)
-    .replace('list', ' {0,3}(?:[*+-]|1[.)])[ \\t]')
-    .replace('html', HTML_OPEN_SRC)
-    .replace('tag', BLOCK_TAGS)
-    .get();
-  const paragraph = rx(PARA_CORE)
-    .replace('hr', HR_SRC)
-    .replace('heading', HEADING_SRC)
-    .replace('|lheading', '')
-    .replace('table', table)
-    .replace('blockquote', BLOCKQUOTE_SRC)
-    .replace('fences', FENCES_SRC)
-    .replace('list', ' {0,3}(?:[*+-]|1[.)])[ \\t]+[^ \\t\\n]')
-    .replace('html', HTML_OPEN_SRC)
-    .replace('tag', BLOCK_TAGS)
-    .get();
-  const blockquote = rx(
+  const lheading = subAll(LHEADING_CORE, [
+    [/bull/g, BULLET],
+    [/blockCode/g, /(?: {4}| {0,3}\t)/],
+    [/fences/g, / {0,3}(?:`{3,}|~{3,})/],
+    [/blockquote/g, / {0,3}>/],
+    [/heading/g, HEADING_SRC],
+    [/hr/g, / {0,3}(?:(?:-[\t ]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})(?:\n+|$)/],
+    [/html/g, / {0,3}<[^\n>]+>\n/],
+    [/table/g, / {0,3}\|?(?:[:\- ]*\|)+[\:\- ]*\n/],
+  ]);
+  const table = subAll(TABLE_SRC, [
+    ['hr', HR_SRC],
+    ['heading', HEADING_SRC],
+    ['blockquote', BLOCKQUOTE_SRC],
+    ['code', /(?: {4}| {0,3}\t)[^\n]/],
+    ['fences', FENCES_SRC],
+    ['list', ' {0,3}(?:[*+-]|1[.)])[ \\t]'],
+    ['html', HTML_OPEN_SRC],
+    ['tag', BLOCK_TAGS],
+  ]);
+  const paragraph = subAll(PARA_CORE, [
+    ['hr', HR_SRC],
+    ['heading', HEADING_SRC],
+    ['|lheading', ''],
+    ['table', table],
+    ['blockquote', BLOCKQUOTE_SRC],
+    ['fences', FENCES_SRC],
+    ['list', ' {0,3}(?:[*+-]|1[.)])[ \\t]+[^ \\t\\n]'],
+    ['html', HTML_OPEN_SRC],
+    ['tag', BLOCK_TAGS],
+  ]);
+  const blockquote = subAll(
     /^( {0,3}> ?(?:(?![ \t]*(?:\n|$))(paragraph)|[^\n]*)(?:\n|$))+/,
-  )
-    .replace('paragraph', paragraph)
-    .get();
+    [['paragraph', paragraph]],
+  );
   return {
     newline: /^(?:[ \t]*(?:\n|$))+/,
     code: /^((?: {4}| {0,3}\t)[^\n]+(?:\n(?:[ \t]*(?:\n|$))*)?)+/,
@@ -474,7 +484,7 @@ function buildBlockRules() {
     heading: /^ {0,3}(#{1,6})(?=\s|$)(.*)(?:\n+|$)/,
     hr: HR_SRC,
     blockquote,
-    list: rx(/^(bull)([ \t][^\n]*?)?(?:\n|$)/).replace(/bull/g, BULLET).get(),
+    list: subAll(/^(bull)([ \t][^\n]*?)?(?:\n|$)/, [[/bull/g, BULLET]]),
     html: BLOCK_HTML,
     def: DEF_RE,
     table,
@@ -631,24 +641,25 @@ INLINE.text = rx(
 // Per-parse lexer state. Fresh for every parse() call: nothing is kept
 // from one case to the next.
 function newLexer() {
-  return {
-    tokens: [],
-    links: Object.create(null),
-    linkCount: 0,
-    inlineQueue: [],
-    inLink: false,
-    inRawBlock: false,
-    linkEmitted: false,
-    linkParenPossible: true,
-    top: true,
-    emStack: [],
-  };
+  const lx = {};
+  lx.tokens = [];
+  lx.links = Object.create(null);
+  lx.linkCount = 0;
+  lx.inlineQueue = [];
+  lx.inLink = false;
+  lx.inRawBlock = false;
+  lx.linkEmitted = false;
+  lx.linkParenPossible = true;
+  lx.top = true;
+  lx.emStack = [];
+  return lx;
 }
 
 // Queue inline tokenisation of `src` into `tokens` (done after the block
 // pass, like marked, so link definitions anywhere in the document apply).
 function queueInline(lx, src, tokens) {
-  lx.inlineQueue.push({ src, tokens });
+  const item = { src, tokens };
+  lx.inlineQueue.push(item);
   return tokens;
 }
 
@@ -1054,6 +1065,42 @@ function mergeSpace(tokens, tok) {
   else tokens.push(tok);
 }
 
+// Skip a run of the given character code from `i`; returns the index just
+// past the run.
+function skipRun(line, i, c) {
+  let j = i;
+  while (j < line.length && line.charCodeAt(j) === c) j++;
+  return j;
+}
+
+// Skip spaces and tabs from `i`; returns the index just past them.
+function skipSpaces(line, i) {
+  let k = i;
+  while (k < line.length && (line.charCodeAt(k) === 32 || line.charCodeAt(k) === 9)) k++;
+  return k;
+}
+
+// Classify one line for the setext scan: 1 = it is a setext underline,
+// -1 = scanning stops here (blank line or another block), 0 = keep going.
+function setextLine(line) {
+  let i = 0;
+  while (i < 3 && line.charCodeAt(i) === 32) i++;
+  const c = line.charCodeAt(i);
+  // A run of `=` or `-` covering the line (after optional spaces) is a
+  // setext underline.
+  if (c === 61 || c === 45) {
+    const runEnd = skipRun(line, i, c);
+    const tailEnd = skipSpaces(line, runEnd);
+    if (tailEnd === line.length && runEnd > i) return 1;
+  }
+  if (line.trim() === '') return -1;
+  if (c === 35 || c === 62 || c === 60) return -1;
+  const fence = (c === 96 || c === 126) &&
+    line.charCodeAt(i + 1) === c && line.charCodeAt(i + 2) === c;
+  if (fence) return -1;
+  return 0;
+}
+
 // Merge a token into the preceding paragraph/text token, extending its raw
 // and text and pointing its queued inline source at the merged text.
 // Returns false when there is no preceding paragraph or text token.
@@ -1100,26 +1147,11 @@ function blockTokens(lx, src, tokens = [], mergePara = false) {
     // (the text cannot cross a blank line), so scan lines only until
     // the first blank line or a line that clearly starts another block.
     let pos = src.indexOf('\n');
-    if (pos === -1) return false;
     while (pos !== -1) {
       const next = src.indexOf('\n', pos + 1);
       const line = src.slice(pos + 1, next === -1 ? src.length : next);
-      let i = 0;
-      while (i < 3 && line.charCodeAt(i) === 32) i++;
-      const c = line.charCodeAt(i);
-      if (c === 61 || c === 45) {
-        let j = i;
-        while (j < line.length && line.charCodeAt(j) === c) j++;
-        let k = j;
-        while (k < line.length && (line.charCodeAt(k) === 32 || line.charCodeAt(k) === 9)) k++;
-        if (k === line.length && j > i) return true;
-      }
-      if (line.trim() === '') return false;
-      if (c === 35 || c === 62 || c === 60) return false;
-      if (
-        (c === 96 && line.charCodeAt(i + 1) === 96 && line.charCodeAt(i + 2) === 96) ||
-        (c === 126 && line.charCodeAt(i + 1) === 126 && line.charCodeAt(i + 2) === 126)
-      ) return false;
+      const verdict = setextLine(line);
+      if (verdict !== 0) return verdict === 1;
       pos = next;
     }
     return false;
@@ -1502,10 +1534,19 @@ function makeLink(lx, match, ref, raw) {
 function tokLink(lx, src) {
   if (lx.linkParenPossible === false) return null;
   const m = INLINE.link.exec(src);
-  if (!m) return null;
+  if (m === null) return null;
   const bang = m[0].charAt(0) === '!' ? 2 : 1;
   if (linkTextHasRawTag(src, m[1], bang)) return null;
-  let href = m[2].trim();
+  const dt = linkDest(m);
+  if (dt === null) return null;
+  return makeLink(lx, m, { href: dt[0], title: dt[1] }, m[0]);
+}
+
+// Validate and clean an inline link's destination and title. The match is
+// adjusted in place when a bare destination ends early at a parenthesis.
+// Returns [dest, title] or null when the destination is malformed.
+function linkDest(m) {
+  const href = m[2].trim();
   if (O.startAngleBracket.test(href)) {
     if (!O.endAngleBracket.test(href)) return null;
     const stripped = stripTail(href.slice(0, -1), '\\');
@@ -1522,17 +1563,11 @@ function tokLink(lx, src) {
   }
   const rawStripped = stripTail(m[0].slice(0, -1), '\\');
   if ((m[0].length - rawStripped.length) % 2 === 0) return null;
-  let dest = m[2];
-  let title = '';
-  title = m[3] ? m[3].slice(1, -1) : '';
-  dest = dest.trim();
+  let dest = m[2].trim();
   if (O.startAngleBracket.test(dest)) dest = dest.slice(1, -1);
-  return makeLink(
-    lx,
-    m,
-    { href: dest && dest.replace(INLINE.anyPunct, '$1'), title: title && title.replace(INLINE.anyPunct, '$1') },
-    m[0],
-  );
+  const title = m[3] ? m[3].slice(1, -1) : '';
+  const clean = (s) => s.replace(INLINE.anyPunct, '$1');
+  return [dest && clean(dest), title && clean(title)];
 }
 
 function tokReflink(lx, src) {
@@ -1737,9 +1772,8 @@ function isEmailChar(code) {
 // The start of the email local part ending at the '@' in src[at], or -1
 // when no email character precedes it.
 function emailLocalStart(src, at) {
-  let s = at - 1;
-  while (s >= 0 && isEmailChar(src.charCodeAt(s))) s--;
-  s++;
+  let s = at;
+  while (s > 0 && isEmailChar(src.charCodeAt(s - 1))) s--;
   return s < at ? s : -1;
 }
 
@@ -2046,8 +2080,8 @@ export function parse(markdown) {
   const lx = newLexer();
   const src = markdown.replace(O.carriageReturn, '\n');
   const tokens = blockTokens(lx, src, []);
-  for (let i = 0; i < lx.inlineQueue.length; i++) {
-    const item = lx.inlineQueue[i];
+  const queue = lx.inlineQueue;
+  for (const item of queue) {
     lx.inRawBlock = false;
     inlineTokens(lx, item.src, item.tokens);
   }
