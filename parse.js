@@ -1671,8 +1671,9 @@ function linkDest(m) {
 function tokReflink(lx, src) {
   const m = INLINE.reflink.exec(src) || INLINE.nolink.exec(src);
   if (m === null) return null;
-  const bang = m[0].charAt(0) === '!' ? 2 : 1;
-  if (linkTextHasRawTag(src, m[1], bang)) return null;
+  // The link text starts after the '!' of an image, else after '['.
+  const textOffset = m[0].charAt(0) === '!' ? 2 : 1;
+  if (linkTextHasRawTag(src, m[1], textOffset)) return null;
   // A collapsed or shortcut reference: the label is the bracket text
   // unless an explicit label follows it.
   const label = m[2] !== undefined && m[2] !== '' ? m[2] : m[1];
@@ -1724,12 +1725,12 @@ function emStrongCloser(lx, src, closerRe, rest, limit, runLen, total, canOpenSt
   for (closerRe.lastIndex = 0; ;) {
     const cm = closerRe.exec(rest);
     if (cm === null || cm.index > limit) break;
-    const g = cm[1] || cm[2] || cm[3] || cm[4] || cm[5] || cm[6];
-    if (!g) continue;
-    const b = [...g].length;
-    if (cm[3] || cm[4]) { openLeft += b; continue; }
-    if (cm[5] || cm[6] || canOpenStrong) {
-      if (wasDelim && (cm[5] || cm[6])) break;
+    const run = delimRun(cm);
+    if (run === null) continue;
+    const b = run.len;
+    if (run.opener) { openLeft += b; continue; }
+    if (run.tail || canOpenStrong) {
+      if (wasDelim && run.tail) break;
       if (total % 3 && !((total + b) % 3)) { skipped += b; continue; }
     }
     if ((openLeft -= b) > 0) continue;
@@ -1777,12 +1778,13 @@ function tokDel(lx, src, masked, prev) {
   return delCloser(lx, src, rest, limit, runLen);
 }
 
-// Pick the delimiter run out of a delRDelim match: the first non-empty
-// capture group, plus whether it is an opener (groups 3/4).
-function delRun(cm) {
+// Pick the delimiter run out of a closer match: the first non-empty
+// capture group, plus whether it is an opener (groups 3/4) or a
+// tail-group match (groups 5/6, used by the emphasis rule of three).
+function delimRun(cm) {
   const g = cm[1] || cm[2] || cm[3] || cm[4] || cm[5] || cm[6];
   if (!g) return null;
-  return { len: [...g].length, opener: !!(cm[3] || cm[4]) };
+  return { len: [...g].length, opener: !!(cm[3] || cm[4]), tail: !!(cm[5] || cm[6]) };
 }
 
 // Scan for the strikethrough closer: the closing run must be exactly the
@@ -1793,7 +1795,7 @@ function delCloser(lx, src, rest, limit, runLen) {
   for (closerRe.lastIndex = 0; ;) {
     const cm = closerRe.exec(rest);
     if (cm === null || cm.index > limit) break;
-    const run = delRun(cm);
+    const run = delimRun(cm);
     if (run === null || run.len !== runLen) continue;
     // An opener extends the run instead of closing it.
     if (run.opener) { openLeft += run.len; continue; }
