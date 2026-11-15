@@ -1302,19 +1302,24 @@ function blockTokens(lx, src, tokens = [], mergePara = false) {
 
 // Scan a string for the last positions where an emphasis/delimiter run
 // could close: a run whose preceding character is not whitespace.
+// Returns the masked source plus the last closer index per delimiter.
 function scanClosers(s) {
   const em = { '*': -1, _: -1 };
   let del = -1;
   const n = s.length;
-  let i = 0;
-  while (i < n) {
+  // Whitespace that disqualifies a run from closing (space, tab, newline,
+  // carriage return, form feed).
+  const isSpace = (c) => c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '\f';
+  for (let i = 0; i < n;) {
     const ch = s[i];
     if (ch !== '*' && ch !== '_' && ch !== '~') { i++; continue; }
-    const prev = i === 0 ? '\n' : s[i - 1];
+    // Measure the run, then record it when the character before it is
+    // not whitespace (a run at the start counts: its "previous" is a
+    // newline).
     let j = i + 1;
     while (j < n && s[j] === ch) j++;
-    const prevIsSpace = prev === ' ' || prev === '\t' || prev === '\n' || prev === '\r' || prev === '\f';
-    if (!prevIsSpace) {
+    const prev = i === 0 ? '\n' : s[i - 1];
+    if (!isSpace(prev)) {
       if (ch === '~') del = i;
       else em[ch] = i;
     }
@@ -1350,14 +1355,19 @@ function maskForEmphasis(lx, src) {
 }
 
 // Mask one reference-style link match for emphasis scanning: a link whose
-// label resolves is replaced by filler of the same length.
+// label resolves is replaced by filler of the same length, so the emphasis
+// scanner cannot see a closer inside it.
 function maskReflink(lx, r) {
   const o = r.lastIndexOf('[');
-  if (!Object.hasOwn(lx.links, normLabel(r.slice(o + 1, -1)))) return r;
+  const label = r.slice(o + 1, -1);
+  if (!Object.hasOwn(lx.links, normLabel(label))) return r;
+  // A link whose text itself contains a link: mask the inner links first,
+  // then fill the label with 'a's.
   if (o > 1 && r.charAt(0) !== '!') {
     const inner = r.slice(1, o - 1);
     if (linkInText(lx, inner)) {
-      return '[' + inner.replace(INLINE.reflinkSearch, (x) => maskReflink(lx, x)) + '][' + 'a'.repeat(r.length - o - 2) + ']';
+      const maskedInner = inner.replace(INLINE.reflinkSearch, (x) => maskReflink(lx, x));
+      return '[' + maskedInner + '][' + 'a'.repeat(r.length - o - 2) + ']';
     }
   }
   return '[' + 'a'.repeat(r.length - 2) + ']';
@@ -1461,6 +1471,20 @@ const INLINE_DISPATCH = {
   32: (lx, src) => tokBr(src),
 };
 
+// Append an inline token, merging a text token into the preceding text
+// token when there is one.
+function pushInline(out, tok) {
+  if (tok.type === 'text') {
+    const last = out[out.length - 1];
+    if (last !== undefined && last.type === 'text') {
+      last.raw += tok.raw;
+      last.text += tok.text;
+      return;
+    }
+  }
+  out.push(tok);
+}
+
 function inlineLoop(lx, src, masked, out) {
   let justText = false;
   let prev = '';
@@ -1486,15 +1510,7 @@ function inlineLoop(lx, src, masked, out) {
     // link), so the check is a truthiness test, not a null test.
     if (tok) {
       src = src.substring(tok.raw.length);
-      if (tok.type === 'text') {
-        const last = out[out.length - 1];
-        if (last !== undefined && last.type === 'text') {
-          last.raw += tok.raw;
-          last.text += tok.text;
-          continue;
-        }
-      }
-      out.push(tok);
+      pushInline(out, tok);
       continue;
     }
     tok = tokInlineText(lx, src);
@@ -1502,11 +1518,7 @@ function inlineLoop(lx, src, masked, out) {
       src = src.substring(tok.raw.length);
       if (tok.raw.slice(-1) !== '_') prev = tok.raw.slice(-1);
       justText = true;
-      const last = out[out.length - 1];
-      if (last !== undefined && last.type === 'text') {
-        last.raw += tok.raw;
-        last.text += tok.text;
-      } else out.push(tok);
+      pushInline(out, tok);
       continue;
     }
     throw new Error('Infinite loop on byte: ' + src.charCodeAt(0));
