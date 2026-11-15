@@ -301,19 +301,22 @@ function stripTail(s, ch, invert) {
   return s.slice(0, end);
 }
 
-// Balanced-paren scan used by link parsing: returns the index of the first
+// Balanced-paren scan used by link parsing. Returns the index of the first
 // unmatched closing paren, -2 when an opener is left unmatched, else -1.
 // A backslash escapes the next character, so it never counts as a paren.
 function parenScan(s, open, close) {
   const openCode = open.charCodeAt(0);
   const closeCode = open.charCodeAt(1);
-  if (s.indexOf(open[0]) < 0 && s.indexOf(open[1]) < 0) return -1;
+  if (!s.includes(open[0]) && !s.includes(open[1])) return -1;
   let depth = 0;
   for (let i = 0; i < s.length; i++) {
     const c = s.charCodeAt(i);
-    if (c === 92) { i++; continue; }
-    if (c === openCode) depth++;
-    else if (c === closeCode) {
+    if (c === 92) {
+      // A backslash escapes the next character: skip both.
+      i++;
+    } else if (c === openCode) {
+      depth++;
+    } else if (c === closeCode) {
       depth--;
       if (depth < 0) return i;
     }
@@ -919,6 +922,15 @@ function consumeItemBody(rest, indent, empty, content, itemText, nextLine) {
   return listItemBody(rest, indent, empty, content, itemText);
 }
 
+// Mark every item of a loose list as loose, turning its bare text tokens
+// into paragraphs.
+function markListLoose(list) {
+  for (const item of list.items) {
+    item.loose = true;
+    for (const t of item.tokens) if (t.type === 'text') t.type = 'paragraph';
+  }
+}
+
 function tokList(lx, src) {
   const first = BLOCK.list.exec(src);
   if (first === null) return null;
@@ -981,12 +993,7 @@ function tokList(lx, src) {
     if (hasBlankSpace) list.loose = true;
   }
   for (const item of list.items) applyTaskItem(lx, list, item);
-  if (list.loose) {
-    for (const item of list.items) {
-      item.loose = true;
-      for (const t of item.tokens) if (t.type === 'text') t.type = 'paragraph';
-    }
-  }
+  if (list.loose) markListLoose(list);
   return list;
 }
 
