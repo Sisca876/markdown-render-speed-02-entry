@@ -756,6 +756,48 @@ function stripBlockquoteMarkers(joined) {
     .replace(O.blockquoteSetextReplace2, '');
 }
 
+// A blockquote token that is itself a blockquote may swallow following
+// lines: rebuild it from the merged text and consume what it took.
+// Returns the updated accumulators plus the action the loop should take.
+function absorbNestedBlockquote(lx, tokens, rest, rawAll, textAll) {
+  const inner = tokens[tokens.length - 1];
+  const tail = rest.join('\n');
+  const merged = inner.raw + '\n' + tail.replace(O.blockquoteSetextReplace2, '');
+  const rebuilt = tokBlockquote(lx, merged);
+  tokens[tokens.length - 1] = rebuilt;
+  const after = merged.substring(rebuilt.raw.length).replace(/^\n/, '');
+  const afterLines = after === '' ? 0 : after.split('\n').length;
+  const consumed = afterLines === 0 ? rest : rest.slice(0, -afterLines);
+  if (consumed.length > 0) {
+    rawAll = rawAll + '\n' + consumed.join('\n');
+  }
+  textAll = textAll.substring(0, textAll.length - inner.text.length) + rebuilt.text;
+  rest = rest.slice(consumed.length);
+  if (rest.length > 0 && O.blockquoteStart.test(rest[0])) {
+    return { rawAll, textAll, rest, action: 'continue' };
+  }
+  return { rawAll, textAll, rest, action: 'break' };
+}
+
+// A list token inside a blockquote may swallow following lines the same way.
+function absorbNestedList(lx, tokens, rest, rawAll, textAll) {
+  const inner = tokens[tokens.length - 1];
+  const tail = rest.join('\n');
+  const merged = inner.raw + '\n' + tail;
+  const rebuilt = tokList(lx, merged);
+  tokens[tokens.length - 1] = rebuilt;
+  const extra = rebuilt.raw.length > inner.raw.length
+    ? merged.slice(inner.raw.length + 1, rebuilt.raw.length).split('\n').length
+    : 0;
+  if (extra > 0) {
+    const extraText = rest.slice(0, extra).join('\n');
+    rawAll = rawAll + '\n' + extraText;
+    textAll = textAll + '\n' + extraText;
+  }
+  rest = rest.slice(extra);
+  return { rawAll, textAll, rest, action: 'continue' };
+}
+
 function tokBlockquote(lx, src) {
   const m = BLOCK.blockquote.exec(src);
   if (m === null) return null;
@@ -779,39 +821,23 @@ function tokBlockquote(lx, src) {
     const last = tokens[tokens.length - 1];
     if (last === undefined) continue;
     const lt = last.type;
+    // A code/heading/hr/html/table token ends the blockquote outright.
     if (lt === 'code' || lt === 'heading' || lt === 'hr' || lt === 'html' || lt === 'table') break;
+    // A nested blockquote or list may swallow the following lines, so
+    // rebuild it from the merged text and consume what it took.
     if (lt === 'blockquote') {
-      const inner = last;
-      const tail = rest.join('\n');
-      const merged = inner.raw + '\n' + tail.replace(O.blockquoteSetextReplace2, '');
-      const rebuilt = tokBlockquote(lx, merged);
-      tokens[tokens.length - 1] = rebuilt;
-      const after = merged.substring(rebuilt.raw.length).replace(/^\n/, '');
-      const afterLines = after === '' ? 0 : after.split('\n').length;
-      const consumed = afterLines === 0 ? rest : rest.slice(0, -afterLines);
-      if (consumed.length > 0) {
-        rawAll = rawAll + '\n' + consumed.join('\n');
-      }
-      textAll = textAll.substring(0, textAll.length - inner.text.length) + rebuilt.text;
-      rest = rest.slice(consumed.length);
-      if (rest.length > 0 && O.blockquoteStart.test(rest[0])) continue;
-      break;
+      const out = absorbNestedBlockquote(lx, tokens, rest, rawAll, textAll);
+      rawAll = out.rawAll;
+      textAll = out.textAll;
+      rest = out.rest;
+      if (out.action === 'break') break;
+      continue;
     }
     if (lt === 'list') {
-      const inner = last;
-      const tail = rest.join('\n');
-      const merged = inner.raw + '\n' + tail;
-      const rebuilt = tokList(lx, merged);
-      tokens[tokens.length - 1] = rebuilt;
-      const extra = rebuilt.raw.length > inner.raw.length
-        ? merged.slice(inner.raw.length + 1, rebuilt.raw.length).split('\n').length
-        : 0;
-      if (extra > 0) {
-        const extraText = rest.slice(0, extra).join('\n');
-        rawAll = rawAll + '\n' + extraText;
-        textAll = textAll + '\n' + extraText;
-      }
-      rest = rest.slice(extra);
+      const out = absorbNestedList(lx, tokens, rest, rawAll, textAll);
+      rawAll = out.rawAll;
+      textAll = out.textAll;
+      rest = out.rest;
       continue;
     }
     // Any other token type: keep consuming the next chunk.
@@ -1351,12 +1377,18 @@ function lastDelCloser(lx, masked) {
   return lastCloserField(lx, masked, 'del');
 }
 
+// Mask the emphasis/delimiter runs in a string when it contains any, so
+// the inline loop can find closers without re-scanning.
+function maskedForEmphasis(lx, src) {
+  const needsMask = src.includes('*') || src.includes('_') || src.includes('~');
+  return needsMask ? maskForEmphasis(lx, src) : src;
+}
+
 function inlineTokens(lx, src, tokens = []) {
   const savedParen = lx.linkParenPossible;
   lx.linkParenPossible = savedParen && src.includes(')');
   try {
-    const needsMask = src.includes('*') || src.includes('_') || src.includes('~');
-    const masked = needsMask ? maskForEmphasis(lx, src) : src;
+    const masked = maskedForEmphasis(lx, src);
     lx.emStack.push({ maskedSrc: masked, em: null, del: null });
     try {
       return inlineLoop(lx, src, masked, tokens);
@@ -1371,16 +1403,20 @@ function inlineTokens(lx, src, tokens = []) {
 // Cheap superset test: could an extended autolink (www., a scheme:// URL,
 // mailto:/xmpp:, or a bare email address) start at this position? The
 // full url regex decides; this only skips it when it cannot match.
+const URL_START_RE = new RegExp(String.raw`^www\.|^https?:\/\/|^ftp:\/\/|^mailto:|^xmpp:`, 'i');
+// Characters that end a bare-URL candidate (whitespace is handled
+// separately; these are < [ ] ` * ~ \ ! ( )).
+const URL_STOP = new Set([60, 91, 93, 96, 42, 126, 92, 33, 40, 41]);
+
 function isUrlStart(src) {
   const c = src.charCodeAt(0);
   const isAlnum = (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
   if (!isAlnum && c !== 46 && c !== 95 && c !== 43 && c !== 45) return false;
-  if (/^www\.|^https?:\/\/|^ftp:\/\/|^mailto:|^xmpp:/i.test(src)) return true;
+  if (URL_START_RE.test(src)) return true;
   for (let i = 1; i < src.length; i++) {
     const ch = src.charCodeAt(i);
     if (ch === 64) return true; // '@': a bare email may start here
-    if (ch <= 32 || ch === 60 || ch === 91 || ch === 93 || ch === 96 || ch === 42 ||
-      ch === 126 || ch === 92 || ch === 33 || ch === 40 || ch === 41) return false;
+    if (ch <= 32 || URL_STOP.has(ch)) return false;
     if (i >= 80) return true; // undecided: let the regex decide
   }
   return false;
@@ -1536,24 +1572,37 @@ function tokLink(lx, src) {
   return makeLink(lx, m, { href: dt[0], title: dt[1] }, m[0]);
 }
 
+// Validate an angle-bracket destination: it must close, and the closing
+// bracket must not be escaped by an odd run of backslashes.
+function validAngleDest(href) {
+  if (!O.endAngleBracket.test(href)) return false;
+  const stripped = stripTail(href.slice(0, -1), '\\');
+  return (href.length - stripped.length) % 2 !== 0;
+}
+
+// Trim a bare destination at the first unbalanced parenthesis, adjusting
+// the match in place. Returns false when the parens are malformed.
+function trimBareDest(m) {
+  const p = parenScan(m[2], '()', '');
+  if (p === -2) return false;
+  if (p > -1) {
+    const cut = (m[0].indexOf('!') === 0 ? 5 : 4) + m[1].length + p;
+    m[2] = m[2].substring(0, p);
+    m[0] = m[0].substring(0, cut).trim();
+    m[3] = '';
+  }
+  return true;
+}
+
 // Validate and clean an inline link's destination and title. The match is
 // adjusted in place when a bare destination ends early at a parenthesis.
 // Returns [dest, title] or null when the destination is malformed.
 function linkDest(m) {
   const href = m[2].trim();
   if (O.startAngleBracket.test(href)) {
-    if (!O.endAngleBracket.test(href)) return null;
-    const stripped = stripTail(href.slice(0, -1), '\\');
-    if ((href.length - stripped.length) % 2 === 0) return null;
-  } else {
-    const p = parenScan(m[2], '()', '');
-    if (p === -2) return null;
-    if (p > -1) {
-      const cut = (m[0].indexOf('!') === 0 ? 5 : 4) + m[1].length + p;
-      m[2] = m[2].substring(0, p);
-      m[0] = m[0].substring(0, cut).trim();
-      m[3] = '';
-    }
+    if (!validAngleDest(href)) return null;
+  } else if (!trimBareDest(m)) {
+    return null;
   }
   const rawStripped = stripTail(m[0].slice(0, -1), '\\');
   if ((m[0].length - rawStripped.length) % 2 === 0) return null;
@@ -1673,6 +1722,14 @@ function tokDel(lx, src, masked, prev) {
   return delCloser(lx, src, rest, limit, runLen);
 }
 
+// Pick the delimiter run out of a delRDelim match: the first non-empty
+// capture group, plus whether it is an opener (groups 3/4).
+function delRun(cm) {
+  const g = cm[1] || cm[2] || cm[3] || cm[4] || cm[5] || cm[6];
+  if (!g) return null;
+  return { len: [...g].length, opener: !!(cm[3] || cm[4]) };
+}
+
 // Scan for the strikethrough closer: the closing run must be exactly the
 // opening run's length; openers (groups 3/4) extend the run instead.
 function delCloser(lx, src, rest, limit, runLen) {
@@ -1681,13 +1738,12 @@ function delCloser(lx, src, rest, limit, runLen) {
   for (closerRe.lastIndex = 0; ;) {
     const cm = closerRe.exec(rest);
     if (cm === null || cm.index > limit) break;
-    const g = cm[1] || cm[2] || cm[3] || cm[4] || cm[5] || cm[6];
-    if (!g) continue;
-    const b = [...g].length;
-    if (b !== runLen) continue;
-    if (cm[3] || cm[4]) { openLeft += b; continue; }
-    if ((openLeft -= b) > 0) continue;
-    const useLen = Math.min(b, b + openLeft);
+    const run = delRun(cm);
+    if (run === null || run.len !== runLen) continue;
+    // An opener extends the run instead of closing it.
+    if (run.opener) { openLeft += run.len; continue; }
+    if ((openLeft -= run.len) > 0) continue;
+    const useLen = Math.min(run.len, run.len + openLeft);
     const firstLen = [...cm[0]][0].length;
     const raw = src.slice(0, runLen + cm.index + firstLen + useLen);
     const inner = raw.slice(runLen, -runLen);
@@ -1696,14 +1752,11 @@ function delCloser(lx, src, rest, limit, runLen) {
   return null;
 }
 
-function tokAutolink(src) {
-  const m = INLINE.autolink.exec(src);
-  if (m === null) return null;
-  const text = m[1];
-  const href = m[2] === '@' ? 'mailto:' + text : text;
+// Build an autolink token from a matched raw/text/href triple.
+function autolinkToken(raw, text, href) {
   return {
     type: 'link',
-    raw: m[0],
+    raw,
     text,
     href,
     autolink: true,
@@ -1711,19 +1764,20 @@ function tokAutolink(src) {
   };
 }
 
+function tokAutolink(src) {
+  const m = INLINE.autolink.exec(src);
+  if (m === null) return null;
+  const text = m[1];
+  const href = m[2] === '@' ? 'mailto:' + text : text;
+  return autolinkToken(m[0], text, href);
+}
+
 function tokUrl(src) {
   const m = INLINE.url.exec(src);
   if (m === null) return null;
+  // An email address matched as a bare URL becomes a mailto: link.
   if (m[2] === '@') {
-    const text = m[0];
-    return {
-      type: 'link',
-      raw: m[0],
-      text,
-      href: 'mailto:' + text,
-      autolink: true,
-      tokens: [{ type: 'text', raw: text, text }],
-    };
+    return autolinkToken(m[0], m[0], 'mailto:' + m[0]);
   }
   // Backpedal: strip trailing punctuation the URL regex over-matched,
   // until the backpedal regex stops shrinking the match.
@@ -1734,14 +1788,7 @@ function tokUrl(src) {
     text = shorter;
   }
   const href = m[1] === 'www.' ? 'http://' + text : text;
-  return {
-    type: 'link',
-    raw: text,
-    text,
-    href,
-    autolink: true,
-    tokens: [{ type: 'text', raw: text, text }],
-  };
+  return autolinkToken(text, text, href);
 }
 
 // Inline text, without the big text regex: find where the plain-text run
