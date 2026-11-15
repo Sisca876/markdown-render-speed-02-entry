@@ -222,22 +222,26 @@ function normLabel(s) {
 const FIND_PIPE = new RegExp(String.raw`\|`, 'g');
 const SPLIT_PIPE = new RegExp(String.raw` \|`);
 const SLASH_PIPE = new RegExp(String.raw`\\\|`, 'g');
-// Split a table row into cells, honouring escaped pipes.
+// Split a table row into cells, honouring escaped pipes. An escaped pipe
+// (preceded by an odd run of backslashes) stays a literal pipe inside a
+// cell; an unescaped pipe separates cells. Leading/trailing empty cells
+// from the row's edge pipes are dropped.
 function splitCells(row, count) {
   const t = row.replace(FIND_PIPE, (m, off, str) => {
-    let escaped = false;
-    let p = off;
-    while (--p >= 0 && str[p] === '\\') escaped = !escaped;
-    return escaped ? '|' : ' |';
+    // Count the backslashes directly before this pipe; an odd count means
+    // the pipe is escaped.
+    let run = 0;
+    for (let p = off - 1; p >= 0 && str[p] === '\\'; p--) run++;
+    return run % 2 === 1 ? '|' : ' |';
   });
   const cells = t.split(SPLIT_PIPE);
-  let i = 0;
-  if (cells[0].trim() || cells.shift(), cells.length > 0 && !cells[cells.length - 1]?.trim()) cells.pop();
+  if (cells.length > 0 && !cells[0].trim()) cells.shift();
+  if (cells.length > 0 && !cells[cells.length - 1].trim()) cells.pop();
   if (count) {
     if (cells.length > count) cells.splice(count);
     else while (cells.length < count) cells.push('');
   }
-  for (; i < cells.length; i++) cells[i] = cells[i].trim().replace(SLASH_PIPE, '|');
+  for (let i = 0; i < cells.length; i++) cells[i] = cells[i].trim().replace(SLASH_PIPE, '|');
   return cells;
 }
 
@@ -888,6 +892,27 @@ function listItemBody(rest, indent, empty, content, itemText) {
   return { text, rest: cur };
 }
 
+// Build one list item: its raw text, task flag, and empty token list.
+function listItem(raw, text) {
+  return {
+    type: 'list_item',
+    raw,
+    task: !!O.listIsTask.test(text),
+    loose: false,
+    text,
+    tokens: [],
+  };
+}
+
+// Consume a list item's body lines: returns the item text and the rest.
+// A blank item (empty first line followed by a blank line) has no body.
+function consumeItemBody(rest, indent, empty, content, itemText, nextLine) {
+  if (empty && O.blankLine.test(nextLine)) {
+    return { text: itemText, rest: rest.substring(nextLine.length + 1) };
+  }
+  return listItemBody(rest, indent, empty, content, itemText);
+}
+
 function tokList(lx, src) {
   const first = BLOCK.list.exec(src);
   if (first === null) return null;
@@ -907,7 +932,6 @@ function tokList(lx, src) {
   const itemRe = O.listItemRegex(bullRe);
   let sawDoubleBlank = false;
   while (rest) {
-    let blankItem = false;
     let itemText = '';
     const m = itemRe.exec(rest);
     if (m === null || BLOCK.hr.test(rest)) break;
@@ -924,29 +948,16 @@ function tokList(lx, src) {
     const gap = rawGap > 4 ? 1 : rawGap;
     const indent = markerLen + gap;
     if (!empty) itemText = content.slice(gap);
-    if (empty && O.blankLine.test(nextLine)) {
-      rest = rest.substring(nextLine.length + 1);
-      blankItem = true;
-    }
-    if (!blankItem) {
-      const body = listItemBody(rest, indent, empty, content, itemText);
-      itemText = body.text;
-      rest = body.rest;
-    }
+    const body = consumeItemBody(rest, indent, empty, content, itemText, nextLine);
+    itemText = body.text;
+    rest = body.rest;
     const itemEnd = startOf();
     const itemRaw = src.slice(itemStart, itemEnd);
     if (!list.loose) {
       if (sawDoubleBlank) list.loose = true;
       else if (O.doubleBlankLine.test(itemRaw)) sawDoubleBlank = true;
     }
-    list.items.push({
-      type: 'list_item',
-      raw: itemRaw,
-      task: !!O.listIsTask.test(itemText),
-      loose: false,
-      text: itemText,
-      tokens: [],
-    });
+    list.items.push(listItem(itemRaw, itemText));
   }
   const lastItem = list.items[list.items.length - 1];
   if (lastItem === undefined) return null;
@@ -1035,6 +1046,17 @@ function tableAlign(cell) {
   return null;
 }
 
+// Build one table cell (header or body): its text, queued inline tokens,
+// and the column alignment.
+function tableCell(lx, text, isHeader, align) {
+  return {
+    text,
+    tokens: queueInline(lx, text, []),
+    header: isHeader,
+    align,
+  };
+}
+
 function tokTable(lx, src) {
   const m = BLOCK.table.exec(src);
   if (m === null || !O.tableDelimiter.test(m[2])) return null;
@@ -1045,21 +1067,11 @@ function tokTable(lx, src) {
   const table = { type: 'table', raw: stripTail(m[0], '\n'), header: [], align: [], rows: [] };
   for (const a of alignsRaw) table.align.push(tableAlign(a));
   for (let i = 0; i < headerCells.length; i++) {
-    table.header.push({
-      text: headerCells[i],
-      tokens: queueInline(lx, headerCells[i], []),
-      header: true,
-      align: table.align[i],
-    });
+    table.header.push(tableCell(lx, headerCells[i], true, table.align[i]));
   }
   for (const line of bodyLines) {
     const cells = splitCells(line, table.header.length);
-    table.rows.push(cells.map((cell, j) => ({
-      text: cell,
-      tokens: queueInline(lx, cell, []),
-      header: false,
-      align: table.align[j],
-    })));
+    table.rows.push(cells.map((cell, j) => tableCell(lx, cell, false, table.align[j])));
   }
   return table;
 }
@@ -1152,11 +1164,16 @@ function mergeIntoPrev(lx, tokens, tok, textPart) {
 
 // Merge a token into the preceding token of the given type, extending its
 // raw and text and dropping the merged token's queued inline source.
-// Returns false when the preceding token is of another type.
+// Merge a token into the preceding token of the same type (a paragraph or
+// text continuation): join the raw with a newline when the previous raw
+// does not already end in one, and re-point the queued inline source at
+// the merged text. Returns false when the preceding token is of another
+// type (or there is none).
 function mergeIntoType(lx, tokens, tok, type) {
   const last = tokens[tokens.length - 1];
   if (last === undefined || last.type !== type) return false;
-  last.raw += (last.raw.endsWith('\n') ? '' : '\n') + tok.raw;
+  const sep = last.raw.endsWith('\n') ? '' : '\n';
+  last.raw += sep + tok.raw;
   last.text += '\n' + tok.text;
   lx.inlineQueue.pop();
   lx.inlineQueue[lx.inlineQueue.length - 1].src = last.text;
@@ -1198,16 +1215,16 @@ function blockTokens(lx, src, tokens = [], mergePara = false) {
     else throw new Error('Infinite loop on byte: ' + src.charCodeAt(0));
     let tok;
     const c0 = src.charCodeAt(0);
+    // Blank lines and leading whitespace belong to a space token.
     if ((c0 === 32 || c0 === 9 || c0 === 10) && (tok = tokSpace(src))) {
       src = src.substring(tok.raw.length);
       mergeSpace(tokens, tok);
       continue;
     }
     const i3 = at3();
-    if (
-      (src.startsWith('    ') || src.charCodeAt(i3) === 9) &&
-      (tok = tokCode(src))
-    ) {
+    // An indented code block: four spaces, or a tab after up to 3 spaces.
+    const indentedCode = src.startsWith('    ') || src.charCodeAt(i3) === 9;
+    if (indentedCode && (tok = tokCode(src))) {
       src = src.substring(tok.raw.length);
       if (!mergeIntoPrev(lx, tokens, tok, tok.text)) tokens.push(tok);
       continue;
