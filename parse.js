@@ -1231,17 +1231,19 @@ function scanClosers(s) {
   const em = { '*': -1, _: -1 };
   let del = -1;
   const n = s.length;
-  for (let i = 0; i < n; i++) {
+  let i = 0;
+  while (i < n) {
     const ch = s[i];
-    if (ch !== '*' && ch !== '_' && ch !== '~') continue;
+    if (ch !== '*' && ch !== '_' && ch !== '~') { i++; continue; }
     const prev = i === 0 ? '\n' : s[i - 1];
     let j = i + 1;
-    for (; j < n && s[j] === ch;) j++;
-    if (prev !== ' ' && prev !== '\t' && prev !== '\n' && prev !== '\r' && prev !== '\f') {
+    while (j < n && s[j] === ch) j++;
+    const prevIsSpace = prev === ' ' || prev === '\t' || prev === '\n' || prev === '\r' || prev === '\f';
+    if (!prevIsSpace) {
       if (ch === '~') del = i;
       else em[ch] = i;
     }
-    i = j - 1;
+    i = j;
   }
   return { maskedSrc: s, em, del };
 }
@@ -1250,9 +1252,6 @@ function scanClosers(s) {
 // spans and raw HTML with filler, keeping the length identical so indices
 // still line up with the original.
 function maskForEmphasis(lx, src) {
-  // Without '[', '`', '<' or a backslash there is nothing to mask: no
-  // link, code span, raw HTML tag or escaped punctuation exists, so the
-  // masked string is the source itself.
   const hasBracket = src.includes('[');
   const hasTick = src.includes('`');
   const hasLt = src.includes('<');
@@ -1260,31 +1259,33 @@ function maskForEmphasis(lx, src) {
   if (!hasBracket && !hasTick && !hasLt && !hasBackslash) return src;
   let t = src;
   if (lx.linkCount > 0 && hasBracket && src.includes(']')) {
-    const re = INLINE.reflinkSearch;
-    const maskOne = (r) => {
-      const o = r.lastIndexOf('[');
-      if (!Object.hasOwn(lx.links, normLabel(r.slice(o + 1, -1)))) return r;
-      if (o > 1 && r.charAt(0) !== '!') {
-        const inner = r.slice(1, o - 1);
-        if (linkInText(lx, inner)) {
-          return '[' + inner.replace(re, maskOne) + '][' + 'a'.repeat(r.length - o - 2) + ']';
-        }
-      }
-      return '[' + 'a'.repeat(r.length - 2) + ']';
-    };
-    t = t.replace(re, maskOne);
+    t = t.replace(INLINE.reflinkSearch, (r) => maskReflink(lx, r));
   }
   if (hasTick || hasBackslash) {
-    t = t.replace(INLINE.anyPunctOutsideCode, (m, ticks, punct) =>
-      punct ? '+'.repeat(m.length)
-        : ticks ? ticks + m.slice(ticks.length, -ticks.length).replace(/`/g, '+') + ticks
-        : m,
-    );
+    t = t.replace(INLINE.anyPunctOutsideCode, (m, ticks, punct) => {
+      if (punct) return '+'.repeat(m.length);
+      if (ticks) return ticks + m.slice(ticks.length, -ticks.length).replace(/`/g, '+') + ticks;
+      return m;
+    });
   }
   if (hasTick || hasLt || (hasBracket && src.includes(']('))) {
     t = t.replace(INLINE.blockSkip, (m) => '[' + 'a'.repeat(m.length - 2) + ']');
   }
   return t;
+}
+
+// Mask one reference-style link match for emphasis scanning: a link whose
+// label resolves is replaced by filler of the same length.
+function maskReflink(lx, r) {
+  const o = r.lastIndexOf('[');
+  if (!Object.hasOwn(lx.links, normLabel(r.slice(o + 1, -1)))) return r;
+  if (o > 1 && r.charAt(0) !== '!') {
+    const inner = r.slice(1, o - 1);
+    if (linkInText(lx, inner)) {
+      return '[' + inner.replace(INLINE.reflinkSearch, (x) => maskReflink(lx, x)) + '][' + 'a'.repeat(r.length - o - 2) + ']';
+    }
+  }
+  return '[' + 'a'.repeat(r.length - 2) + ']';
 }
 
 function linkInText(lx, s) {
@@ -1295,42 +1296,41 @@ function linkInText(lx, s) {
   for (const m of s.matchAll(INLINE.reflinkSearch)) {
     const r = m[0];
     const o = r.lastIndexOf('[');
-    if (
-      !(r.charAt(0) === '!' || !Object.hasOwn(lx.links, normLabel(r.slice(o + 1, -1)))) &&
-      !(o > 1 && linkInText(lx, r.slice(1, o - 1)))
-    ) return true;
+    const isImage = r.charAt(0) === '!';
+    const labelKnown = Object.hasOwn(lx.links, normLabel(r.slice(o + 1, -1)));
+    const nested = o > 1 && linkInText(lx, r.slice(1, o - 1));
+    if (!isImage && labelKnown && !nested) return true;
   }
   return false;
+}
+
+// Read one field of the cached scanClosers result for this masked string,
+// computing it once per tokeniser invocation.
+function lastCloserField(lx, masked, field) {
+  const top = lx.emStack[lx.emStack.length - 1];
+  if (top !== undefined && top.maskedSrc === masked) {
+    if (top[field] === null) top[field] = scanClosers(masked)[field];
+    return top[field];
+  }
+  return scanClosers(masked)[field];
 }
 
 // Last possible closer index for `ch` ('*' or '_') in the masked string,
 // consulting the per-tokeniser cache stack first.
 function lastEmCloser(lx, masked, ch) {
-  const top = lx.emStack[lx.emStack.length - 1];
-  if (top && top.maskedSrc === masked) {
-    if (top.em === null) top.em = scanClosers(masked).em;
-    return top.em[ch];
-  }
-  return scanClosers(masked).em[ch];
+  return lastCloserField(lx, masked, 'em')[ch];
 }
 
 function lastDelCloser(lx, masked) {
-  const top = lx.emStack[lx.emStack.length - 1];
-  if (top && top.maskedSrc === masked) {
-    if (top.del === null) top.del = scanClosers(masked).del;
-    return top.del;
-  }
-  return scanClosers(masked).del;
+  return lastCloserField(lx, masked, 'del');
 }
 
 function inlineTokens(lx, src, tokens = []) {
   const savedParen = lx.linkParenPossible;
   lx.linkParenPossible = savedParen && src.includes(')');
   try {
-    const masked =
-      src.includes('*') || src.includes('_') || src.includes('~')
-        ? maskForEmphasis(lx, src)
-        : src;
+    const needsMask = src.includes('*') || src.includes('_') || src.includes('~');
+    const masked = needsMask ? maskForEmphasis(lx, src) : src;
     lx.emStack.push({ maskedSrc: masked, em: null, del: null });
     try {
       return inlineLoop(lx, src, masked, tokens);
@@ -1347,13 +1347,9 @@ function inlineTokens(lx, src, tokens = []) {
 // full url regex decides; this only skips it when it cannot match.
 function isUrlStart(src) {
   const c = src.charCodeAt(0);
-  if (
-    !((c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) ||
-      c === 46 || c === 95 || c === 43 || c === 45)
-  ) return false;
-  if (
-    /^www\.|^https?:\/\/|^ftp:\/\/|^mailto:|^xmpp:/i.test(src)
-  ) return true;
+  const isAlnum = (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
+  if (!isAlnum && c !== 46 && c !== 95 && c !== 43 && c !== 45) return false;
+  if (/^www\.|^https?:\/\/|^ftp:\/\/|^mailto:|^xmpp:/i.test(src)) return true;
   for (let i = 1; i < src.length; i++) {
     const ch = src.charCodeAt(i);
     if (ch === 64) return true; // '@': a bare email may start here
@@ -1559,12 +1555,12 @@ function tokReflink(lx, src) {
 
 function tokEmStrong(lx, src, masked, prev) {
   const m = INLINE.emStrongLDelim.exec(src);
-  if (!m || (!m[1] && !m[2] && !m[3] && !m[4])) return null;
+  if (m === null || (!m[1] && !m[2] && !m[3] && !m[4])) return null;
   const delim = m[0][0];
   const wasDelim = prev === delim;
   const offset = masked.length - src.length;
   let left = offset;
-  for (; left > 0 && masked[left - 1] === delim;) left--;
+  while (left > 0 && masked[left - 1] === delim) left--;
   const beforeRun = [...masked.slice(Math.max(0, left - 2), left)].at(-1) ?? '';
   const beforeIsDelimOrPunct =
     beforeRun === '*' || beforeRun === '_' || !!INLINE.punctuation.exec(beforeRun);
@@ -1572,76 +1568,87 @@ function tokEmStrong(lx, src, masked, prev) {
   const prevIsPunct = left < offset ? beforeIsDelimOrPunct : !!INLINE.punctuation.exec(prev);
   if (m[4] && O.unicodeAlphaNumeric.test(prev)) return null;
   const afterPunct = m[1] || m[3] || '';
-  if (!afterPunct || !prev || prevIsPunct) {
-    let runLen = [...m[0]].length - 1;
-    let g;
-    let b;
-    let openLeft = runLen;
-    let skipped = 0;
-    const total = offset - left + runLen;
-    const canOpenStrong = !!beforeRun.trim() && (!!afterPunct || (delim === '*' && !beforeIsDelimOrPunct));
-    if (delim !== '*' && delim !== '_') return null;
-    const closerRe = delim === '*' ? INLINE.emStrongRDelimAst : INLINE.emStrongRDelimUnd;
-    const lastCloser = lastEmCloser(lx, masked, delim);
-    const needPos = masked.length - src.length + runLen;
-    if (lastCloser < needPos) return null;
-    const rest = masked.slice(-src.length + runLen);
-    const limit = lastCloser - needPos;
-    for (closerRe.lastIndex = 0; ;) {
-      const cm = closerRe.exec(rest);
-      if (cm === null || cm.index > limit) break;
-      g = cm[1] || cm[2] || cm[3] || cm[4] || cm[5] || cm[6];
-      if (!g) continue;
-      b = [...g].length;
-      if (cm[3] || cm[4]) { openLeft += b; continue; }
-      else if (cm[5] || cm[6] || canOpenStrong) {
-        if (wasDelim && (cm[5] || cm[6])) break;
-        if (total % 3 && !((total + b) % 3)) { skipped += b; continue; }
-      }
-      if ((openLeft -= b) > 0) continue;
-      b = Math.min(b, b + openLeft + skipped);
-      const firstLen = [...cm[0]][0].length;
-      const rawLen = runLen + cm.index + firstLen + b;
-      const raw = src.slice(0, rawLen);
-      if (Math.min(runLen, b) % 2) {
-        const inner = raw.slice(1, -1);
-        return { type: 'em', raw, text: inner, tokens: inlineTokens(lx, inner) };
-      }
-      const inner = raw.slice(2, -2);
-      return { type: 'strong', raw, text: inner, tokens: inlineTokens(lx, inner) };
+  if (afterPunct && prev && !prevIsPunct) return null;
+  const runLen = [...m[0]].length - 1;
+  const total = offset - left + runLen;
+  const canOpenStrong = !!beforeRun.trim() && (!!afterPunct || (delim === '*' && !beforeIsDelimOrPunct));
+  if (delim !== '*' && delim !== '_') return null;
+  const closerRe = delim === '*' ? INLINE.emStrongRDelimAst : INLINE.emStrongRDelimUnd;
+  const lastCloser = lastEmCloser(lx, masked, delim);
+  const needPos = masked.length - src.length + runLen;
+  if (lastCloser < needPos) return null;
+  const rest = masked.slice(-src.length + runLen);
+  const limit = lastCloser - needPos;
+  return emStrongCloser(lx, src, closerRe, rest, limit, runLen, total, canOpenStrong, wasDelim);
+}
+
+// Scan for the emphasis/strong closer: walk the right-delimiter matches,
+// skipping openers (groups 3/4) and applying the rule of three, until the
+// opening run is exhausted. Returns the em/strong token or null.
+function emStrongCloser(lx, src, closerRe, rest, limit, runLen, total, canOpenStrong, wasDelim) {
+  let openLeft = runLen;
+  let skipped = 0;
+  for (closerRe.lastIndex = 0; ;) {
+    const cm = closerRe.exec(rest);
+    if (cm === null || cm.index > limit) break;
+    const g = cm[1] || cm[2] || cm[3] || cm[4] || cm[5] || cm[6];
+    if (!g) continue;
+    const b = [...g].length;
+    if (cm[3] || cm[4]) { openLeft += b; continue; }
+    if (cm[5] || cm[6] || canOpenStrong) {
+      if (wasDelim && (cm[5] || cm[6])) break;
+      if (total % 3 && !((total + b) % 3)) { skipped += b; continue; }
     }
+    if ((openLeft -= b) > 0) continue;
+    const useLen = Math.min(b, b + openLeft + skipped);
+    const firstLen = [...cm[0]][0].length;
+    const rawLen = runLen + cm.index + firstLen + useLen;
+    const raw = src.slice(0, rawLen);
+    if (Math.min(runLen, useLen) % 2) {
+      const inner = raw.slice(1, -1);
+      return { type: 'em', raw, text: inner, tokens: inlineTokens(lx, inner) };
+    }
+    const inner = raw.slice(2, -2);
+    return { type: 'strong', raw, text: inner, tokens: inlineTokens(lx, inner) };
   }
   return null;
 }
 
 function tokCodespan(src) {
   const m = INLINE.code.exec(src);
-  if (!m) return null;
-  let text = m[2].replace(O.newLineCharGlobal, ' ');
-  const hasNonSpace = O.nonSpaceChar.test(text);
-  const wrapped = O.startingSpaceChar.test(text) && O.endingSpaceChar.test(text);
-  if (hasNonSpace && wrapped) text = text.substring(1, text.length - 1);
-  return { type: 'codespan', raw: m[0], text };
+  if (m === null) return null;
+  const text = m[2].replace(O.newLineCharGlobal, ' ');
+  const stripped = O.nonSpaceChar.test(text) &&
+    O.startingSpaceChar.test(text) && O.endingSpaceChar.test(text)
+    ? text.substring(1, text.length - 1)
+    : text;
+  return { type: 'codespan', raw: m[0], text: stripped };
 }
 
 function tokBr(src) {
   const m = INLINE.br.exec(src);
-  if (m) return { type: 'br', raw: m[0] };
-  return null;
+  if (m === null) return null;
+  return { type: 'br', raw: m[0] };
 }
 
 function tokDel(lx, src, masked, prev) {
   const m = INLINE.delLDelim.exec(src);
-  if (!m) return null;
+  if (m === null) return null;
   if (!((m[1] || '') || !prev || INLINE.punctuation.exec(prev))) return null;
   const runLen = [...m[0]].length - 1;
-  let openLeft = runLen;
   const lastCloser = lastDelCloser(lx, masked);
   const needPos = masked.length - src.length + runLen;
   if (lastCloser < needPos) return null;
   const rest = masked.slice(-src.length + runLen);
   const limit = lastCloser - needPos;
+  return delCloser(lx, src, rest, limit, runLen);
+}
+
+// Scan for the strikethrough closer: the closing run must be exactly the
+// opening run's length; openers (groups 3/4) extend the run instead.
+function delCloser(lx, src, rest, limit, runLen) {
   const closerRe = INLINE.delRDelim;
+  let openLeft = runLen;
   for (closerRe.lastIndex = 0; ;) {
     const cm = closerRe.exec(rest);
     if (cm === null || cm.index > limit) break;
@@ -1662,16 +1669,9 @@ function tokDel(lx, src, masked, prev) {
 
 function tokAutolink(src) {
   const m = INLINE.autolink.exec(src);
-  if (!m) return null;
-  let text;
-  let href;
-  if (m[2] === '@') {
-    text = m[1];
-    href = 'mailto:' + text;
-  } else {
-    text = m[1];
-    href = text;
-  }
+  if (m === null) return null;
+  const text = m[1];
+  const href = m[2] === '@' ? 'mailto:' + text : text;
   return {
     type: 'link',
     raw: m[0],
@@ -1683,25 +1683,31 @@ function tokAutolink(src) {
 }
 
 function tokUrl(src) {
-  let m = INLINE.url.exec(src);
-  if (!m) return null;
-  let text;
-  let href;
+  const m = INLINE.url.exec(src);
+  if (m === null) return null;
   if (m[2] === '@') {
-    text = m[0];
-    href = 'mailto:' + text;
-  } else {
-    let cur;
-    do {
-      cur = m[0];
-      m[0] = INLINE.backpedal.exec(m[0])?.[0] ?? '';
-    } while (cur !== m[0]);
-    text = m[0];
-    href = m[1] === 'www.' ? 'http://' + m[0] : m[0];
+    const text = m[0];
+    return {
+      type: 'link',
+      raw: m[0],
+      text,
+      href: 'mailto:' + text,
+      autolink: true,
+      tokens: [{ type: 'text', raw: text, text }],
+    };
   }
+  // Backpedal: strip trailing punctuation the URL regex over-matched,
+  // until the backpedal regex stops shrinking the match.
+  let text = m[0];
+  for (;;) {
+    const shorter = INLINE.backpedal.exec(text)?.[0] ?? '';
+    if (shorter === text) break;
+    text = shorter;
+  }
+  const href = m[1] === 'www.' ? 'http://' + text : text;
   return {
     type: 'link',
-    raw: m[0],
+    raw: text,
     text,
     href,
     autolink: true,
