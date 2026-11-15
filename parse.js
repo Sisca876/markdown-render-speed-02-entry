@@ -1871,6 +1871,9 @@ function textRunEnd(src) {
   // from each ':'), then take the leftmost one that qualifies. A www.
   // that is not preceded by a space, tab, *, _, ~ or ( does not count,
   // and the search moves on to the next candidate.
+// Collect URL-start candidates (www., mailto:, xmpp:, and scheme://) that
+// lie before `end`, sorted leftmost first.
+function urlCandidates(src, end) {
   const cands = [];
   for (const word of ['www.', 'mailto:', 'xmpp:']) {
     let at = src.indexOf(word, 1);
@@ -1888,11 +1891,20 @@ function textRunEnd(src) {
     colon = src.indexOf(':', colon + 1);
   }
   cands.sort((a, b) => a.pos - b.pos);
-  for (const cand of cands) {
-    if (cand.www) {
-      const pc = src.charCodeAt(cand.pos - 1);
-      if (pc !== 32 && pc !== 9 && pc !== 42 && pc !== 95 && pc !== 126 && pc !== 40) continue;
-    }
+  return cands;
+}
+
+// A www. candidate only counts when preceded by a space, tab, *, _, ~ or (.
+function wwwPreceded(src, pos) {
+  const pc = src.charCodeAt(pos - 1);
+  return pc === 32 || pc === 9 || pc === 42 || pc === 95 || pc === 126 || pc === 40;
+}
+
+// Take the leftmost URL candidate that qualifies; a www. that is not
+// preceded by a space, tab, *, _, ~ or ( does not count, and the search
+// moves on to the next candidate.
+  for (const cand of urlCandidates(src, end)) {
+    if (cand.www && !wwwPreceded(src, cand.pos)) continue;
     end = cand.pos;
     break;
   }
@@ -2105,11 +2117,14 @@ const BLOCK_RENDER = {
   },
 };
 
+// Render a list of block tokens to HTML, dispatching on each token type.
 function renderTokens(tokens) {
   let out = '';
   for (const tok of tokens) {
     const render = BLOCK_RENDER[tok.type];
-    if (render === undefined) throw new Error('Token with "' + tok.type + '" type was not found.');
+    if (render === undefined) {
+      throw new Error('Token with "' + tok.type + '" type was not found.');
+    }
     out += render(tok);
   }
   return out;
@@ -2117,12 +2132,16 @@ function renderTokens(tokens) {
 
 // ---------------------------------------------------------------- entry point
 
+// Parse Markdown to HTML, byte-identical to marked 18.1.3 (default
+// options, GFM on). Two phases: the block lexer tokenizes the source and
+// queues inline work; the inline pass then fills each token's children.
 export function parse(markdown) {
   const lx = newLexer();
   const src = markdown.replace(O.carriageReturn, '\n');
   const tokens = blockTokens(lx, src, []);
   const queue = lx.inlineQueue;
-  for (const item of queue) {
+  for (let i = 0; i < queue.length; i++) {
+    const item = queue[i];
     lx.inRawBlock = false;
     inlineTokens(lx, item.src, item.tokens);
   }
