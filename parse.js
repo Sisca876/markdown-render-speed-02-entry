@@ -456,14 +456,17 @@ function subAll(source, subs) {
 
 function buildBlockRules() {
   const lheading = subAll(LHEADING_CORE, [
-    [/bull/g, BULLET],
-    [/blockCode/g, /(?: {4}| {0,3}\t)/],
-    [/fences/g, / {0,3}(?:`{3,}|~{3,})/],
-    [/blockquote/g, / {0,3}>/],
-    [/heading/g, HEADING_SRC],
-    [/hr/g, / {0,3}(?:(?:-[\t ]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})(?:\n+|$)/],
-    [/html/g, / {0,3}<[^\n>]+>\n/],
-    [/table/g, / {0,3}\|?(?:[:\- ]*\|)+[\:\- ]*\n/],
+    [new RegExp(String.raw`bull`, 'g'), BULLET],
+    [new RegExp(String.raw`blockCode`, 'g'), new RegExp(String.raw`(?: {4}| {0,3}\t)`)],
+    [new RegExp(String.raw`fences`, 'g'), new RegExp(String.raw` {0,3}(?:\x60{3,}|~{3,})`)],
+    [new RegExp(String.raw`blockquote`, 'g'), new RegExp(String.raw` {0,3}>`)],
+    [new RegExp(String.raw`heading`, 'g'), HEADING_SRC],
+    [
+      new RegExp(String.raw`hr`, 'g'),
+      new RegExp(String.raw` {0,3}(?:(?:-[\t ]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})(?:\n+|$)`),
+    ],
+    [new RegExp(String.raw`html`, 'g'), new RegExp(String.raw` {0,3}<[^\n>]+>\n`)],
+    [new RegExp(String.raw`table`, 'g'), new RegExp(String.raw` {0,3}\|?(?:[:\- ]*\|)+[\:\- ]*\n`)],
   ]);
   const table = subAll(TABLE_SRC, [
     ['hr', HR_SRC],
@@ -491,20 +494,23 @@ function buildBlockRules() {
     [['paragraph', paragraph]],
   );
   return {
-    newline: /^(?:[ \t]*(?:\n|$))+/,
-    code: /^((?: {4}| {0,3}\t)[^\n]+(?:\n(?:[ \t]*(?:\n|$))*)?)+/,
-    fences:
-      /^ {0,3}(`{3,}(?=[^`\n]*(?:\n|$))|~{3,})([^\n]*)(?:\n|$)(?:|([\s\S]*?)(?:\n|$))(?: {0,3}(?:(?=`)\1`*|(?=~)\1~*) *(?=\n|$)|$)/,
-    heading: /^ {0,3}(#{1,6})(?=\s|$)(.*)(?:\n+|$)/,
+    newline: new RegExp(String.raw`^(?:[ \t]*(?:\n|$))+`),
+    code: new RegExp(String.raw`^((?: {4}| {0,3}\t)[^\n]+(?:\n(?:[ \t]*(?:\n|$))*)?)+`),
+    fences: new RegExp(
+      String.raw`^ {0,3}(\x60{3,}(?=[^\x60\n]*(?:\n|$))|~{3,})([^\n]*)(?:\n|$)(?:|([\s\S]*?)(?:\n|$))(?: {0,3}(?:(?=\x60)\1\x60*|(?=~)\1~*) *(?=\n|$)|$)`,
+    ),
+    heading: new RegExp(String.raw`^ {0,3}(#{1,6})(?=\s|$)(.*)(?:\n+|$)`),
     hr: HR_SRC,
     blockquote,
-    list: subAll(/^(bull)([ \t][^\n]*?)?(?:\n|$)/, [[/bull/g, BULLET]]),
+    list: subAll(new RegExp(String.raw`^(bull)([ \t][^\n]*?)?(?:\n|$)`), [
+      [new RegExp(String.raw`bull`, 'g'), BULLET],
+    ]),
     html: BLOCK_HTML,
     def: DEF_RE,
     table,
     lheading,
     paragraph,
-    text: /^[^\n]+/,
+    text: new RegExp(String.raw`^[^\n]+`),
   };
 }
 
